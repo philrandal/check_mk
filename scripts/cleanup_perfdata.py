@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/python3
 # -*- encoding: utf-8; py-indent-offset: 4 -*-
 
 '''
@@ -24,13 +24,14 @@ It defines classes_and_methods
 @contact:    schulte.marcel@gmail.com
 @deffield    updated: 2015-08-17
 '''
-
+from __future__ import print_function
 import os
 import sys
 from argparse import ArgumentParser
 from argparse import RawDescriptionHelpFormatter
 
-import livestatus
+#import livestatus
+import socket
 import xml.etree.ElementTree as ET
 import shutil
 import time
@@ -45,12 +46,14 @@ __updated__ = '2015-08-17'
 xdays = 90
 
 # Set this to False if Check_MK Micro Core is not in use, True otherwise
-cmc_is_in_use = True
+cmc_is_in_use = False
 
 try:
     omd_root = os.getenv("OMD_ROOT")
-    socket_path = "unix:" + omd_root + "/tmp/run/live"
+    socket_path = omd_root + "/tmp/run/live"
+#    socket_path = "/var/nagios/rw/live"
     perfdata_path = omd_root + "/var/pnp4nagios/perfdata"
+#    perfdata_path = "/usr/local/pnp4nagios/var/perfdata"
 except:
     sys.stderr.write("This script is indented to run in an OMD site\n")
     sys.stderr.write("Please change socket_path and perfdata_path above,\n")
@@ -78,18 +81,26 @@ def p_out(msg):
         msg = "DRYRUN: %s" % msg
 
     if verbose:
-        print msg
+        print(msg)
 
     return
 
 
 def get_livestatus_data(query):
-    try:
-        return livestatus.SingleSiteConnection(socket_path).query_table(query)
-    except Exception as e:  # livestatus.MKLivestatusException, e:
-        print "Livestatus error: %s" % str(e)
-        sys.exit(1)
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.connect(socket_path)
+    #print("query = %s" % query) 
+    # Write command to socket
+    s.send(query.encode())
 
+    # Important: Close sending direction. That way
+    # the other side knows, we are finished.
+    s.shutdown(socket.SHUT_WR)
+
+    # Now read the answer
+    answer = s.recv(100000000).decode()
+    #print("Answer=%s" % answer)
+    return answer
 
 def search_files(host_path):
     all_files = {}
@@ -117,12 +128,13 @@ def process_xml_files(host, all_files, old_files):
     global deleted
     global kept
 
-    query_svcs = "GET services\nColumns: description host_name"
-    query_svcs += "\nFilter: host_name = %s" % host
+    query_svcs = "GET services\nColumns: description host_name\n"
+    query_svcs += "Filter: host_name = %s\n" % host
 
     svcs = {}
-
-    for svc, _host in get_livestatus_data(query_svcs):
+    answer = get_livestatus_data(query_svcs)
+    table = [ line.split(';') for line in answer.split('\n')[:-1] ]
+    for svc, _host in table:
         svcs[svc] = True
 
     for xmlfile in old_files['xml']:
@@ -178,13 +190,14 @@ def process_rrd_files(host, all_files, old_files):
 
 
 def get_hosts():
-    query_hosts = "GET hosts\nColumns: name alias"
+    query_hosts = "GET hosts\nColumns: name\n"
 
     hosts = {}
-
-    for host, _alias in get_livestatus_data(query_hosts):
+    answer = get_livestatus_data(query_hosts)
+    for host in answer.split('\n')[:-1]:
         hosts[host] = True
 
+    #print("hosts:%s" % hosts)
     return hosts
 
 
@@ -192,24 +205,26 @@ def process_host(host, hosts):
     global deleted
 
     host_path = perfdata_path + "/" + host
-
+    old_files = {}
+    
     if host not in hosts:
-        # host does not exist (anymore), delete regardless of file age
-        p_out("Host '%s' does not exist (anymore), deleting folder" % host)
+        if host != ".pnp-internal":
+            # host does not exist (anymore), delete regardless of file age
+            p_out("Host '%s' does not exist (anymore), deleting folder" % host)
 
-        deleted['folders'] += 1
+            deleted['folders'] += 1
 
-        if not dryrun:
-            shutil.rmtree(host_path)
+            if not dryrun:
+                shutil.rmtree(host_path)
 
     else:  # search for files too old
         all_files, old_files = search_files(host_path)
 
-        if old_files.get('xml', None):
-            all_files = process_xml_files(host, all_files, old_files)
+    if old_files.get('xml', None):
+        all_files = process_xml_files(host, all_files, old_files)
 
-        if old_files.get('rrd', None):
-            process_rrd_files(host, all_files, old_files)
+    if old_files.get('rrd', None):
+        process_rrd_files(host, all_files, old_files)
 
     return
 
@@ -314,7 +329,7 @@ USAGE
         p_out("search and delete files older than %s days" % str(xdays))
 
         # MAIN BODY #
-        print "starting at %s" % str(now)
+        print ("starting at %s" % str(now))
 
         hosts = get_hosts()
 
