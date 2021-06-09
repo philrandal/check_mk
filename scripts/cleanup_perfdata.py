@@ -87,20 +87,26 @@ def p_out(msg):
 
 
 def get_livestatus_data(query):
-    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    s.connect(socket_path)
-    #print("query = %s" % query) 
-    # Write command to socket
-    s.send(query.encode())
+    try:
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.connect(socket_path)
+        #print("query = %s" % query)
+        # Write command to socket
+        s.send(query.encode())
 
-    # Important: Close sending direction. That way
-    # the other side knows, we are finished.
-    s.shutdown(socket.SHUT_WR)
+        # Important: Close sending direction. That way
+        # the other side knows, we are finished.
+        s.shutdown(socket.SHUT_WR)
 
-    # Now read the answer
-    answer = s.recv(100000000).decode()
-    #print("Answer=%s" % answer)
-    return answer
+        # Now read the answer
+        answer = s.recv(100000000).decode()
+        #print("Answer=%s" % answer)
+        return answer
+    except Exception as e:  # livestatus.MKLivestatusException, e:
+        sys.stderr.write("Livestatus error: %s\n" % str(e))
+        sys.stderr.write("Site at '%s' not running?\n" % omd_root)
+        sys.exit(1)
+
 
 def search_files(host_path):
     all_files = {}
